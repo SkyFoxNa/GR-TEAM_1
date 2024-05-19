@@ -1,7 +1,11 @@
 import contextlib
 
 from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    async_sessionmaker,
+    create_async_engine,
+)
 
 from src.conf.config import config
 
@@ -15,11 +19,11 @@ class DatabaseSessionManager:
         :param self: Represent the instance of the class
         :param url: str: Create the engine
         :return: A new instance of the class
-        :doc-author: Trelent
         """
         self._engine: AsyncEngine | None = create_async_engine(url)
-        self._session_maker: async_sessionmaker = async_sessionmaker(autoflush=False, autocommit=False,
-                                                                     bind=self._engine)
+        self._session_maker: async_sessionmaker = async_sessionmaker(
+            autoflush=False, autocommit=False, bind=self._engine
+        )
 
     @contextlib.asynccontextmanager
     async def session(self):
@@ -30,16 +34,16 @@ class DatabaseSessionManager:
 
         :param self: Represent the instance of the class
         :return: A context manager, which is an object that has __enter__ and __exit__ methods
-        :doc-author: Naboka Artem
         """
         if self._session_maker is None:
-            raise Exception("Session is not initialized")
+            raise Exception("Session Maker is not initialized")
         session = self._session_maker()
         try:
             yield session
         except SQLAlchemyError as err:
-            print(err)
+            print(f"Database error: {err}")
             await session.rollback()
+            raise
         finally:
             await session.close()
 
@@ -55,7 +59,6 @@ async def get_db():
     the difference is that yield from delegates to another generator.
 
     :return: A context manager that can be used to interact with the database
-    :doc-author: Naboka Artem
     """
     async with sessionmanager.session() as session:
         yield session

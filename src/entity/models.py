@@ -1,10 +1,10 @@
 import enum
 from datetime import date, datetime
-
+from sqlalchemy import create_engine
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy import String, Date, Integer, ForeignKey, DateTime, func, Enum, Boolean, Column
 from sqlalchemy.orm import DeclarativeBase
-
+from src.conf.config import config
 
 class Base(DeclarativeBase) :
     pass
@@ -40,6 +40,7 @@ class User(Base) :
         back_populates = "user",
         cascade = "all, delete-orphan"
     )
+    ban_users: Mapped[relationship] = relationship("BanUser", back_populates = "user", cascade = "all, delete-orphan")
 
 
 class Friendship(Base) :
@@ -61,9 +62,9 @@ class Photo(Base) :
 
     id: Mapped[int] = mapped_column(primary_key = True)
     title: Mapped[str] = mapped_column(String, index = True)
-    description: Mapped[str] = mapped_column(String)
+    description: Mapped[str] = mapped_column(String, nullable = True)
     file_path: Mapped[str] = mapped_column(String)
-    file_path_transform: Mapped[str] = mapped_column(String)
+    file_path_transform: Mapped[str] = mapped_column(String, nullable=True)
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey('users.id'))
     created_at: Mapped[date] = mapped_column('created_at', DateTime, default = func.now(), nullable = False)
 
@@ -72,7 +73,7 @@ class Photo(Base) :
                                                           cascade = "all, delete-orphan")
     ratings_photos: Mapped[relationship] = relationship("Rating", back_populates = "photo",
                                                         cascade = "all, delete-orphan")
-    tags: Mapped[relationship] = relationship("Tag", secondary = "photo_tags", backref = "photos")
+    photo_tags: Mapped[relationship] = relationship("PhotoTag", back_populates = "photo", cascade = "all, delete-orphan")
 
 
 class Comment(Base) :
@@ -83,6 +84,8 @@ class Comment(Base) :
     user_id: Mapped[int] = mapped_column(Integer, ForeignKey('users.id'))
     photo_id: Mapped[int] = mapped_column(Integer, ForeignKey('photos.id'))
     created_at: Mapped[date] = mapped_column('created_at', DateTime, default = func.now(), nullable = False)
+    updated_at: Mapped[date] = mapped_column('updated_at', DateTime, default = func.now(), nullable = False,
+                                             onupdate = func.now())
 
     user: Mapped["User"] = relationship("User", back_populates = "user_comments")
     photo_commented: Mapped["Photo"] = relationship("Photo", back_populates = "commented_photos")
@@ -106,12 +109,22 @@ class Tag(Base) :
 
     id: Mapped[int] = mapped_column(primary_key = True)
     name: Mapped[str] = mapped_column(String, unique = True)
+    photo_tags: Mapped[relationship] = relationship("PhotoTag", back_populates = "tag")
 
     # photos_relation: Mapped[relationship] = relationship("Photo", secondary = "photo_tags", backref = "tags")
 
 
-class PhotoTag(Base):
+class PhotoTag(Base) :
     __tablename__ = "photo_tags"
 
-    photo_id: Mapped[int] = Column(Integer, ForeignKey("photos.id"), primary_key=True)
-    tag_id: Mapped[int] = Column(Integer, ForeignKey("tags.id"), primary_key=True)
+    photo_id: Mapped[int] = Column(Integer, ForeignKey("photos.id"), primary_key = True)
+    tag_id: Mapped[int] = Column(Integer, ForeignKey("tags.id"), primary_key = True)
+    photo: Mapped["Photo"] = relationship("Photo", back_populates = "photo_tags")
+    tag: Mapped["Tag"] = relationship("Tag", back_populates = "photo_tags")
+
+
+class BanUser(Base):
+    __tablename__ = "ban_users"
+    id: Mapped[int] = mapped_column(primary_key = True)
+    user_id: Mapped[int] = mapped_column(Integer, ForeignKey('users.id'), unique = True)
+    user: Mapped["User"] = relationship("User", back_populates = "ban_users")

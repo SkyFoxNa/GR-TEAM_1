@@ -1,11 +1,13 @@
-from fastapi import Depends
+from fastapi import Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from libgravatar import Gravatar
+from typing import List
 
 from src.database.db import get_db
-from src.entity.models import User
+from src.entity.models import User, BanUser
 from src.schemas.user import UserSchema
+from src.conf import messages
 
 
 async def get_user_by_email(email: str, db: AsyncSession = Depends(get_db)):
@@ -16,11 +18,28 @@ async def get_user_by_email(email: str, db: AsyncSession = Depends(get_db)):
     :param email: str: Pass in the email of the user we want to get from our database
     :param db: AsyncSession: Connect to the database
     :return: A user object if the email exists in the database
-    :doc-author: Naboka Artem
     """
     filter_user = select(User).filter_by(email=email)
     user = await db.execute(filter_user)
     user = user.scalar_one_or_none()
+    return user
+
+
+async def get_user_by_id(user_id: int, db: AsyncSession = Depends(get_db)) -> User:
+    """
+The get_user_by_id function takes a user_id and returns the User object with that id.
+If no such user exists, it raises an HTTPException with status code 404 and detail message NOT_USER.
+
+:param user_id: int: Get the user by id
+:param db: AsyncSession: Pass the database session to the function
+:return: A user object
+:doc-author: Trelent
+"""
+    filter_user = select(User).filter(User.id == user_id)
+    user = await db.execute(filter_user)
+    user = user.scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=404, detail=messages.NOT_USER)
     return user
 
 
@@ -31,7 +50,6 @@ async def create_user(body: UserSchema, db: AsyncSession = Depends(get_db)):
     :param body: UserSchema: Validate the request body
     :param db: AsyncSession: Get the database session from the dependency
     :return: The newly created user
-    :doc-author: Naboka Artem
     """
     avatar = None
     try:
@@ -41,6 +59,10 @@ async def create_user(body: UserSchema, db: AsyncSession = Depends(get_db)):
         print(err)
 
     new_user = User(**body.model_dump(), avatar=avatar)
+    new_user.count_photo = 0
+    new_user.count_comment = 0
+    new_user.count_rating = 0
+    new_user.count_friendship = 0
     db.add(new_user)
     await db.commit()
     await db.refresh(new_user)
@@ -55,7 +77,6 @@ async def update_token(user: User, token: str | None, db: AsyncSession):
     :param token: str | None: Specify that the token parameter can be either a string or none
     :param db: AsyncSession: Pass the database session to the function
     :return: The user
-    :doc-author: Naboka Artem
     """
     user.refresh_token = token
     await db.commit()
@@ -70,7 +91,6 @@ async def verified_email(email: str, db: AsyncSession) -> None:
     :param email: str: Specify the email of the user to be verified
     :param db: AsyncSession: Pass the database session into the function
     :return: None
-    :doc-author: Naboka Artem
     """
     user = await get_user_by_email(email, db)
     user.verified = True
@@ -88,7 +108,6 @@ async def update_user_password(email: str, password: str, db: AsyncSession) -> N
     :param password: str: Update the user's password
     :param db: AsyncSession: Pass the database session to the function
     :return: None
-    :doc-author: Naboka Artem
     """
     user = await get_user_by_email(email, db)
     user.password = password
@@ -105,10 +124,11 @@ async def update_avatar_url(email: str, url: str | None, db: AsyncSession) -> Us
     :param url: str | None: Specify that the url parameter can be either a string or none
     :param db: AsyncSession: Pass in the database session
     :return: A user object
-    :doc-author: Naboka Artem
     """
     user = await get_user_by_email(email, db)
     user.avatar = url
     await db.commit()
     await db.refresh(user)
     return user
+
+

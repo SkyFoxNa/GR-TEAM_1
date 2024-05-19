@@ -1,7 +1,8 @@
 import pickle
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
+from sqlalchemy import func, select
 
 from fastapi import Depends, HTTPException, status
 from passlib.context import CryptContext
@@ -11,8 +12,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from jose import JWTError, jwt
 
 from src.database.db import get_db
+from src.entity.models import Photo, Comment, Rating, Friendship, User
 from src.repository import users as repository_users
+from src.schemas import user as schemas_user
 from src.conf.config import config
+from src.conf import messages
+from src.conf.messages import AuthMessages as auth_massages
 
 
 class Auth:
@@ -25,6 +30,7 @@ class Auth:
         db=0,
         password=config.REDIS_PASSWORD,
     )
+    oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
 
     def verify_password(self, plain_password, hashed_password):
         """
@@ -36,7 +42,6 @@ class Auth:
         :param plain_password: Pass in the password that the user has entered
         :param hashed_password: Check if the password is correct
         :return: True if the password is correct and false otherwise
-        :doc-author: Naboka Artem
         """
         return self.pwd_context.verify(plain_password, hashed_password)
 
@@ -48,13 +53,12 @@ class Auth:
         :param self: Represent the instance of the class
         :param password: str: Pass in the password that is being hashed
         :return: A hash of the password
-        :doc-author: Naboka Artem
         """
         return self.pwd_context.hash(password)
 
-    oauth2_scheme = OAuth2PasswordBearer(tokenUrl="api/auth/login")
-
-    async def create_access_token(self, data: dict, expires_delta: Optional[float] = None):
+    async def create_access_token(
+        self, data: dict, expires_delta: Optional[float] = None
+    ):
         """
         The create_access_token function creates a new access token.
             Args:
@@ -66,18 +70,23 @@ class Auth:
         :param data: dict: Pass the data that will be encoded in the jwt
         :param expires_delta: Optional[float]: Set the expiration time of the access token
         :return: A jwt token
-        :doc-author: Naboka Artem
         """
         to_encode = data.copy()
         if expires_delta:
-            expire = datetime.now() + timedelta(seconds=expires_delta)
+            expire = datetime.now(timezone.utc) + timedelta(seconds=expires_delta)
         else:
-            expire = datetime.now() + timedelta(minutes=15)
-        to_encode.update({"iat": datetime.now(), "exp": expire, "scope": "access_token"})
-        encoded_access_token = jwt.encode(to_encode, self.SECRET_KEY, algorithm=self.ALGORITHM)
+            expire = datetime.now(timezone.utc) + timedelta(minutes=15)
+        to_encode.update(
+            {"iat": datetime.now(timezone.utc), "exp": expire, "scope": "access_token"}
+        )
+        encoded_access_token = jwt.encode(
+            to_encode, self.SECRET_KEY, algorithm=self.ALGORITHM
+        )
         return encoded_access_token
 
-    async def create_refresh_token(self, data: dict, expires_delta: Optional[float] = None):
+    async def create_refresh_token(
+        self, data: dict, expires_delta: Optional[float] = None
+    ):
         """
         The create_refresh_token function creates a refresh token for the user.
             Args:
@@ -88,15 +97,18 @@ class Auth:
         :param data: dict: Pass the user's data to be encoded
         :param expires_delta: Optional[float]: Set the expiration time of the refresh token
         :return: A refresh token that is encoded with the user's information
-        :doc-author: Naboka Artem
         """
         to_encode = data.copy()
         if expires_delta:
-            expire = datetime.now() + timedelta(seconds=expires_delta)
+            expire = datetime.now(timezone.utc) + timedelta(seconds=expires_delta)
         else:
-            expire = datetime.now() + timedelta(days=7)
-        to_encode.update({"iat": datetime.now(), "exp": expire, "scope": "refresh_token"})
-        encoded_refresh_token = jwt.encode(to_encode, self.SECRET_KEY, algorithm=self.ALGORITHM)
+            expire = datetime.now(timezone.utc) + timedelta(days=7)
+        to_encode.update(
+            {"iat": datetime.now(timezone.utc), "exp": expire, "scope": "refresh_token"}
+        )
+        encoded_refresh_token = jwt.encode(
+            to_encode, self.SECRET_KEY, algorithm=self.ALGORITHM
+        )
         return encoded_refresh_token
 
     async def decode_refresh_token(self, refresh_token: str):
@@ -109,20 +121,27 @@ class Auth:
         :param self: Represent the instance of the class
         :param refresh_token: str: Pass in the refresh_token that was sent from the client
         :return: The email of the user
-        :doc-author: Naboka Artem
         """
         try:
-            payload = jwt.decode(refresh_token, self.SECRET_KEY, algorithms=[self.ALGORITHM])
-            if payload['scope'] == 'refresh_token':
-                email = payload['sub']
+            payload = jwt.decode(
+                refresh_token, self.SECRET_KEY, algorithms=[self.ALGORITHM]
+            )
+            if payload["scope"] == "refresh_token":
+                email = payload["sub"]
                 return email
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Invalid scope for token!')
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=auth_massages.INVALID_SCOPE_TOKEN,
+            )
         except JWTError:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail='Could not validate credentials!')
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=auth_massages.NOT_VALIDATE_CREDENTIALS,
+            )
 
     async def get_current_user(
         self, token: str = Depends(oauth2_scheme), db: AsyncSession = Depends(get_db)
-    ):
+    ) -> User:
         """
         The get_current_user function is a dependency that will be used in the
             protected endpoints. It takes a token as an argument and returns the user
@@ -132,16 +151,81 @@ class Auth:
         :param token: str: Get the token from the authorization header
         :param db: AsyncSession: Get the database session
         :return: A user object
-        :doc-author: Naboka Artem
         """
         credentials_exception = HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
+            detail=auth_massages.NOT_VALIDATE_CREDENTIALS,
             headers={"WWW-Authenticate": "Bearer"},
         )
-
         try:
             # Decode JWT
+            payload = jwt.decode(token, self.SECRET_KEY, algorithms=[self.ALGORITHM])
+            if payload["scope"] == "access_token":
+                email = payload["sub"]
+                if email is None:
+                    raise credentials_exception
+            else:
+                raise credentials_exception
+        except JWTError as e:
+            print(e)
+            raise credentials_exception
+
+        user_hash = str(email)
+        user = await self.cache.get(user_hash)
+        if user is None:
+            user = await repository_users.get_user_by_email(email, db)
+            if user is None:
+                raise credentials_exception
+            await self.cache.set(user_hash, pickle.dumps(user))
+            await self.cache.expire(user_hash, 300)
+        else:
+            user = pickle.loads(user)
+        photos_count = await db.execute(
+            select(func.count(Photo.id)).where(Photo.user_id == user.id)
+        )
+        count_photo = photos_count.scalar() 
+        user.count_photo = count_photo 
+        count_comment = await db.execute(
+            select(func.count(Comment.id)).where(Comment.user_id == user.id)
+        )
+        count_comment = count_comment.scalar()
+        user.count_comment = count_comment
+        count_rating = await db.execute(
+            select(func.count(Rating.id)).where(Rating.user_id == user.id)
+        )
+        count_rating = count_rating.scalar()
+        user.count_rating = count_rating
+        count_friendship = await db.execute(
+            select(func.count(Friendship.user_id)).where(Friendship.user_id == user.id)
+        )
+        count_friendship = count_friendship.scalar()
+        user.count_friendship = count_friendship
+        return user
+
+    async def get_user_info(
+        self,
+        user_id: int,
+        token: str = Depends(oauth2_scheme),
+        db: AsyncSession = Depends(get_db),
+    ) -> schemas_user.UserResponse:
+        """
+        The get_user_info function returns the user information.
+            The function takes a token and an id of the user as parameters.
+            If there is no such user, then it will return 404 error.
+        
+        :param self: Represent the instance of the class
+        :param user_id: int: Get the user id from the url
+        :param token: str: Get the token from the request header
+        :param db: AsyncSession: Get the database connection
+        :param : Get the user id from the url
+        :return: The user object
+        """
+        credentials_exception = HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=auth_massages.NOT_VALIDATE_CREDENTIALS,
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+        try:
             payload = jwt.decode(token, self.SECRET_KEY, algorithms=[self.ALGORITHM])
             if payload["scope"] == "access_token":
                 email = payload["sub"]
@@ -154,19 +238,52 @@ class Auth:
 
         user_hash = str(email)
         user = await self.cache.get(user_hash)
-        print(email)
-
-        if user is None :
-            print("User from database")
+        if user is None:
             user = await repository_users.get_user_by_email(email, db)
-            if user is None :
+            if user is None:
                 raise credentials_exception
             await self.cache.set(user_hash, pickle.dumps(user))
             await self.cache.expire(user_hash, 300)
-        else :
-            print("User from cache")
+        else:
             user = pickle.loads(user)
-        return user
+
+        user = await repository_users.get_user_by_id(user_id, db)
+        if user is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=messages.NOT_USER,
+            )
+        photos_count = await db.execute(
+            select(func.count(Photo.id)).where(Photo.user_id == user.id)
+        )
+        count_photo = photos_count.scalar() 
+        user.count_photo = count_photo  
+        count_comment = await db.execute(
+            select(func.count(Comment.id)).where(Comment.user_id == user.id)
+        )
+        count_comment = count_comment.scalar()
+        user.count_comment = count_comment
+        count_rating = await db.execute(
+            select(func.count(Rating.id)).where(Rating.user_id == user.id)
+        )
+        count_rating = count_rating.scalar()
+        user.count_rating = count_rating
+        count_friendship = await db.execute(
+            select(func.count(Friendship.user_id)).where(Friendship.user_id == user.id)
+        )
+        count_friendship = count_friendship.scalar()
+        user.count_friendship = count_friendship
+        user_response = schemas_user.UserResponseAll(
+            id=user.id,
+            username=user.username,
+            avatar=user.avatar,
+            count_photo=count_photo,
+            count_comment=count_comment,
+            count_rating=count_rating,
+            count_friendship=count_friendship,
+            role=user.role,
+        )
+        return user_response
 
     def create_email_token(self, data: dict):
         """
@@ -178,12 +295,12 @@ class Auth:
         :param self: Make the function a method of the class
         :param data: dict: Pass the data to be encoded
         :return: A token
-        :doc-author: Naboka Artem
         """
         to_encode = data.copy()
-        expire = datetime.now() + timedelta(days=7)
-        to_encode.update({"iat": datetime.now(), "exp": expire})
+        expire = datetime.now(timezone.utc) + timedelta(days=7)
+        to_encode.update({"iat": datetime.now(timezone.utc), "exp": expire})
         token = jwt.encode(to_encode, self.SECRET_KEY, algorithm=self.ALGORITHM)
+
         return token
 
     async def get_email_from_token(self, token: str):
@@ -194,7 +311,6 @@ class Auth:
         :param self: Represent the instance of the class
         :param token: str: Pass in the token that is sent to the user's email address
         :return: The email address associated with the token
-        :doc-author: Naboka Artem
         """
         try:
             payload = jwt.decode(token, self.SECRET_KEY, algorithms=[self.ALGORITHM])
@@ -202,8 +318,10 @@ class Auth:
             return email
         except JWTError as e:
             print(e)
-            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                                detail="Invalid token for email verification!")
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=auth_massages.INVALID_TOKEN_EMAIL,
+            )
 
 
 auth_service = Auth()
